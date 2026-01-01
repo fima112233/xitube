@@ -1,0 +1,8 @@
+run = "python main.py"
+entrypoint = "main.py"
+
+[env]
+SECRET_KEY = "xitube-replit-secret-key-2024"
+
+[features]
+search = true
