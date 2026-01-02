@@ -1,4 +1,4 @@
-from flask import Flask, request, redirect, send_from_directory, render_template_string
+from flask import Flask, request, redirect, send_from_directory, render_template_string, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -13,21 +13,17 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['ALLOWED_EXTENSIONS'] = {'mp4', 'avi', 'mov', 'mkv', 'webm', 'flv', 'wmv'}
 
-# Твой админ пароль и секретные URL
 ADMIN_PASSWORD = 'fima1456Game!'
-SECRET_ADMIN_URL = 'fima1456admin'  # Секретная часть URL для админки
+SECRET_ADMIN_URL = 'fima1456admin'
 
-# Твой URL на Replit
 REPLIT_URL = 'https://xitube--efimkisik.replit.app'
 
-# Создаем папку uploads
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 db = SQLAlchemy(app)
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 
-# Модели
 class User(db.Model, UserMixin):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
@@ -64,11 +60,9 @@ class Like(db.Model):
 def load_user(user_id):
     return User.query.get(int(user_id))
 
-# Инициализация базы данных
 with app.app_context():
     db.create_all()
     
-    # Создаем тестового пользователя
     if not User.query.first():
         user = User(
             username='test',
@@ -83,16 +77,20 @@ with app.app_context():
         print(f"👤 Блокировка пользователя: {REPLIT_URL}/banuser_{ADMIN_PASSWORD}/[user_id]")
         print(f"📹 Удаление видео: {REPLIT_URL}/deletevideo_{ADMIN_PASSWORD}/[video_id]")
 
+@app.route('/health')
+def health_check():
+    return jsonify({'status': 'ok', 'timestamp': datetime.utcnow().isoformat()}), 200
+
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
 
-# HTML шаблон
 def render_page(title, content):
     return f'''
     <!DOCTYPE html>
     <html>
     <head>
         <title>Xitube - {title}</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
             * {{ margin: 0; padding: 0; box-sizing: border-box; }}
             body {{ font-family: Arial, sans-serif; background: #0f0f0f; color: white; }}
@@ -115,6 +113,10 @@ def render_page(title, content):
             table {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}
             th, td {{ padding: 10px; border: 1px solid #333; text-align: left; }}
             th {{ background: #333; }}
+            @media (max-width: 768px) {{
+                .header {{ flex-direction: column; text-align: center; }}
+                .video-grid {{ grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); }}
+            }}
         </style>
     </head>
     <body>
@@ -134,14 +136,12 @@ def render_page(title, content):
     </html>
     '''
 
-# Роуты для пользователей
 @app.route('/')
 def index():
     videos = Video.query.filter_by(is_deleted=False).order_by(Video.created_at.desc()).all()
     
     video_html = ""
     for video in videos:
-        # Проверяем заблокирован ли автор
         author_banned = video.author.is_banned if video.author else False
         
         if author_banned:
@@ -314,13 +314,11 @@ def upload():
         if not allowed_file(file.filename):
             return "Неподдерживаемый формат файла", 400
         
-        # Сохраняем файл
         timestamp = int(datetime.now().timestamp())
         filename = f"{current_user.id}_{timestamp}_{file.filename.replace(' ', '_')}"
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
         
-        # Создаем запись в базе
         video = Video(
             title=title,
             filename=filename,
@@ -357,7 +355,6 @@ def upload():
 def video_page(video_id):
     video = Video.query.get_or_404(video_id)
     
-    # Проверяем удалено ли видео
     if video.is_deleted:
         content = f'''
         <div class="deleted-video">
@@ -371,7 +368,6 @@ def video_page(video_id):
         '''
         return render_page('Видео удалено', content)
     
-    # Проверяем заблокирован ли автор
     if video.author and video.author.is_banned:
         content = f'''
         <div class="deleted-video">
@@ -385,7 +381,6 @@ def video_page(video_id):
         '''
         return render_page('Автор заблокирован', content)
     
-    # Увеличиваем просмотры
     video.views += 1
     db.session.commit()
     
@@ -442,25 +437,55 @@ def like_video(video_id):
     db.session.commit()
     return redirect(f'/video/{video_id}')
 
-# ==============================
-# АДМИН РОУТЫ (ТОЛЬКО ПО URL)
-# ==============================
+# Комментарии к видео
+@app.route('/comment/<int:video_id>', methods=['POST'])
+@login_required
+def add_comment(video_id):
+    if current_user.is_banned:
+        return "Ваш аккаунт заблокирован", 403
+    
+    video = Video.query.get(video_id)
+    if not video or video.is_deleted or (video.author and video.author.is_banned):
+        return "Видео недоступно", 404
+    
+    text = request.form.get('text')
+    if not text or len(text.strip()) < 1:
+        return "Комментарий не может быть пустым", 400
+    
+    if len(text) > 500:
+        return "Комментарий слишком длинный (макс. 500 символов)", 400
+    
+    comment = Comment(
+        text=text.strip(),
+        user_id=current_user.id,
+        video_id=video_id
+    )
+    db.session.add(comment)
+    db.session.commit()
+    
+    return redirect(f'/video/{video_id}')
 
-# Главная админ панель
+@app.route('/delete_comment/<int:comment_id>')
+@login_required
+def delete_comment(comment_id):
+    comment = Comment.query.get_or_404(comment_id)
+    
+    if current_user.id != comment.user_id and not current_user.is_admin:
+        return "У вас нет прав удалить этот комментарий", 403
+    
+    db.session.delete(comment)
+    db.session.commit()
+    
+    return redirect(f'/video/{comment.video_id}')
+
 @app.route(f'/{SECRET_ADMIN_URL}')
 def secret_admin_panel():
-    """Секретная админ панель - доступ только по URL"""
-    
-    # Статистика
     total_users = User.query.count()
     total_videos = Video.query.count()
     banned_users = User.query.filter_by(is_banned=True).count()
     deleted_videos = Video.query.filter_by(is_deleted=True).count()
     
-    # Последние видео
     recent_videos = Video.query.order_by(Video.created_at.desc()).limit(10).all()
-    
-    # Последние пользователи
     recent_users = User.query.order_by(User.created_at.desc()).limit(10).all()
     
     videos_html = ""
@@ -585,18 +610,14 @@ def secret_admin_panel():
     '''
     return render_page('Секретная админка', content)
 
-# Управление файлами
 @app.route(f'/filemanager_{ADMIN_PASSWORD}')
 def file_manager():
-    """Управление файлами - доступ только по URL с паролем"""
-    
     files = []
     if os.path.exists(app.config['UPLOAD_FOLDER']):
         for filename in os.listdir(app.config['UPLOAD_FOLDER']):
             filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
             if os.path.isfile(filepath):
                 size = os.path.getsize(filepath)
-                # Ищем видео в базе
                 video = Video.query.filter_by(filename=filename).first()
                 video_id = video.id if video else 'Не в базе'
                 video_title = video.title if video else 'Неизвестно'
@@ -662,16 +683,13 @@ def file_manager():
     '''
     return render_page('Управление файлами', content)
 
-# Удаление файла
 @app.route(f'/deletefile_{ADMIN_PASSWORD}/<filename>')
 def delete_file(filename):
-    """Удаление файла - доступ только по URL с паролем"""
     filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
     
     if os.path.exists(filepath):
         os.remove(filepath)
         
-        # Помечаем видео как удаленное в базе
         video = Video.query.filter_by(filename=filename).first()
         if video:
             video.is_deleted = True
@@ -698,10 +716,8 @@ def delete_file(filename):
     </div>
     '''
 
-# Блокировка пользователя
 @app.route(f'/banuser_{ADMIN_PASSWORD}/<int:user_id>')
 def ban_user(user_id):
-    """Блокировка пользователя - доступ только по URL с паролем"""
     user = User.query.get(user_id)
     
     if user:
@@ -709,7 +725,6 @@ def ban_user(user_id):
         user.ban_reason = request.args.get('reason', 'Нарушение правил Xitube')
         db.session.commit()
         
-        # Помечаем все видео пользователя как недоступные
         videos = Video.query.filter_by(user_id=user_id).all()
         for video in videos:
             video.is_deleted = True
@@ -737,10 +752,8 @@ def ban_user(user_id):
     </div>
     '''
 
-# Разблокировка пользователя
 @app.route(f'/unbanuser_{ADMIN_PASSWORD}/<int:user_id>')
 def unban_user(user_id):
-    """Разблокировка пользователя - доступ только по URL с паролем"""
     user = User.query.get(user_id)
     
     if user:
@@ -748,7 +761,6 @@ def unban_user(user_id):
         user.ban_reason = None
         db.session.commit()
         
-        # Восстанавливаем видео пользователя
         videos = Video.query.filter_by(user_id=user_id).all()
         for video in videos:
             if video.delete_reason and "Автор заблокирован" in video.delete_reason:
@@ -776,10 +788,8 @@ def unban_user(user_id):
     </div>
     '''
 
-# Удаление видео
 @app.route(f'/deletevideo_{ADMIN_PASSWORD}/<int:video_id>')
 def delete_video(video_id):
-    """Удаление видео - доступ только по URL с паролем"""
     video = Video.query.get(video_id)
     
     if video:
@@ -809,10 +819,8 @@ def delete_video(video_id):
     </div>
     '''
 
-# Восстановление видео
 @app.route(f'/restorevideo_{ADMIN_PASSWORD}/<int:video_id>')
 def restore_video(video_id):
-    """Восстановление видео - доступ только по URL с паролем"""
     video = Video.query.get(video_id)
     
     if video:
@@ -840,7 +848,6 @@ def restore_video(video_id):
     </div>
     '''
 
-# Статические файлы
 @app.route('/uploads/<filename>')
 def uploaded_file(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
@@ -851,8 +858,8 @@ if __name__ == '__main__':
     print("🎬 XITUBE ЗАПУЩЕН!")
     print("=" * 70)
     print(f"🌐 Сайт: {REPLIT_URL}")
-    print(f"🔐 Админка: {REPLIT_URL}/{SECRET_ADMIN_URL}")
-    print(f"🗑️ Файлы: {REPLIT_URL}/filemanager_{ADMIN_PASSWORD}")
+    print(f"🔐 Админ панель: {REPLIT_URL}/{SECRET_ADMIN_URL}")
+    print(f"🗑️ Управление файлами: {REPLIT_URL}/filemanager_{ADMIN_PASSWORD}")
     print(f"👤 Тестовый пользователь: test / test123")
     print("=" * 70)
     app.run(host='0.0.0.0', port=port, debug=True)
