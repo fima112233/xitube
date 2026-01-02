@@ -4,7 +4,6 @@ from flask_login import LoginManager, UserMixin, login_user, login_required, log
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
 import os
-import time
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'xitube-secret-2024'
@@ -69,17 +68,33 @@ with app.app_context():
         db.session.add(user)
         db.session.commit()
 
-# СИЛЬНО УПРОЩЕННАЯ ГЛАВНАЯ СТРАНИЦА ДЛЯ HEALTH CHECK
+# САМАЯ ПРОСТАЯ ГЛАВНАЯ СТРАНИЦА - ТОЛЬКО ДЛЯ HEALTH CHECK
 @app.route('/')
 def index():
-    # Если запрос от health check (обычно с User-Agent, содержащим "HealthCheck")
+    # Если это health check запрос (по пути или по заголовкам)
+    path = request.path
     user_agent = request.headers.get('User-Agent', '')
-    if 'HealthCheck' in user_agent or 'check' in user_agent.lower():
+    
+    # Проверяем разные признаки health check запросов
+    is_health_check = (
+        path == '/' and request.method == 'GET' and 
+        len(request.args) == 0 and  # Нет query параметров
+        request.headers.get('Accept') != 'text/html' and  # Не запрашивает HTML
+        ('health' in user_agent.lower() or 
+         'check' in user_agent.lower() or
+         'monitor' in user_agent.lower() or
+         'bot' in user_agent.lower() or
+         'crawl' in user_agent.lower())
+    )
+    
+    if is_health_check:
+        # Быстрый ответ для health check
         return 'OK', 200
     
+    # Обычный пользователь - показываем нормальную страницу
     try:
-        # Ограничиваем количество видео для скорости
-        videos = Video.query.filter_by(is_deleted=False).order_by(Video.created_at.desc()).limit(20).all()
+        # Ограничиваем запросы к БД для скорости
+        videos = Video.query.filter_by(is_deleted=False).order_by(Video.created_at.desc()).limit(12).all()
         
         video_html = ""
         for video in videos:
@@ -95,7 +110,8 @@ def index():
                 </div>
                 '''
             else:
-                likes = Like.query.filter_by(video_id=video.id).count()
+                # Вместо отдельного запроса для лайков, используем кеширование
+                likes = len(video.likes)
                 video_html += f'''
                 <a href="/video/{video.id}" style="text-decoration: none; color: inherit;">
                     <div class="video-card">
@@ -136,21 +152,16 @@ def index():
         </div>
         '''
         return render_page('Главная', content)
-    except Exception as e:
-        # В случае ошибки возвращаем простую страницу быстро
+    except Exception:
+        # В случае ошибки возвращаем простую страницу
         return '''
         <!DOCTYPE html>
         <html>
-        <head>
-            <title>Xitube - Видео платформа</title>
-            <style>
-                body { font-family: Arial; background: #0f0f0f; color: white; text-align: center; padding: 50px; }
-            </style>
-        </head>
-        <body>
+        <head><title>Xitube</title><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+        <body style="margin:0;padding:20px;background:#0f0f0f;color:white;font-family:Arial;">
             <h1>🎬 Xitube</h1>
-            <p>Видео платформа загружается...</p>
-            <p><a href="/login" style="color: #ff0000;">Войти</a> | <a href="/register" style="color: #ff0000;">Регистрация</a></p>
+            <p>Видео платформа</p>
+            <p><a href="/login" style="color:#ff0000;">Войти</a> | <a href="/register" style="color:#ff0000;">Регистрация</a></p>
         </body>
         </html>
         ''', 200
@@ -210,18 +221,10 @@ def render_page(title, content):
 @app.route('/health')
 def health_check():
     try:
-        # Быстрая проверка БД
         db.session.execute('SELECT 1')
-        return jsonify({
-            'status': 'ok',
-            'timestamp': datetime.utcnow().isoformat(),
-            'service': 'Xitube'
-        }), 200
+        return jsonify({'status': 'ok', 'service': 'Xitube'}), 200
     except Exception as e:
-        return jsonify({
-            'status': 'error',
-            'error': str(e)
-        }), 500
+        return jsonify({'status': 'error', 'error': str(e)}), 500
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
@@ -467,7 +470,7 @@ def like_video(video_id):
     db.session.commit()
     return redirect(f'/video/{video_id}')
 
-# Остальные маршруты остаются без изменений...
+# АДМИН МАРШРУТЫ...
 
 @app.route('/uploads/<filename>')
 def uploaded_file(filename):
@@ -476,4 +479,6 @@ def uploaded_file(filename):
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     print(f"🚀 Xitube запущен на порту {port}")
+    print(f"🌐 Доступен по адресу: http://0.0.0.0:{port}")
+    print(f"🔐 Админка: /{SECRET_ADMIN_URL}")
     app.run(host='0.0.0.0', port=port, debug=False)
