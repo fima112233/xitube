@@ -4,7 +4,6 @@ from flask_login import LoginManager, UserMixin, login_user, login_required, log
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
 import os
-import requests
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'xitube-secret-2024'
@@ -15,8 +14,6 @@ app.config['ALLOWED_EXTENSIONS'] = {'mp4', 'avi', 'mov', 'mkv', 'webm', 'flv', '
 
 ADMIN_PASSWORD = 'fima1456Game!'
 SECRET_ADMIN_URL = 'fima1456admin'
-
-REPLIT_URL = 'https://xitube--efimkisik.replit.app'
 
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
@@ -70,16 +67,14 @@ with app.app_context():
         )
         db.session.add(user)
         db.session.commit()
-        print("✅ База инициализирована. Тестовый пользователь: test / test123")
-        print(f"🌐 Сайт: {REPLIT_URL}")
-        print(f"🔐 Админ панель: {REPLIT_URL}/{SECRET_ADMIN_URL}")
-        print(f"🗑️ Управление файлами: {REPLIT_URL}/filemanager_{ADMIN_PASSWORD}")
-        print(f"👤 Блокировка пользователя: {REPLIT_URL}/banuser_{ADMIN_PASSWORD}/[user_id]")
-        print(f"📹 Удаление видео: {REPLIT_URL}/deletevideo_{ADMIN_PASSWORD}/[video_id]")
 
 @app.route('/health')
 def health_check():
-    return jsonify({'status': 'ok', 'timestamp': datetime.utcnow().isoformat()}), 200
+    try:
+        db.session.execute('SELECT 1')
+        return jsonify({'status': 'ok'}), 200
+    except:
+        return jsonify({'status': 'error'}), 500
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
@@ -138,63 +133,70 @@ def render_page(title, content):
 
 @app.route('/')
 def index():
-    videos = Video.query.filter_by(is_deleted=False).order_by(Video.created_at.desc()).all()
-    
-    video_html = ""
-    for video in videos:
-        author_banned = video.author.is_banned if video.author else False
+    try:
+        videos = Video.query.filter_by(is_deleted=False).order_by(Video.created_at.desc()).all()
         
-        if author_banned:
-            video_html += f'''
-            <div class="video-card banned">
-                <div class="video-info">
-                    <div class="video-title">❌ Видео заблокировано</div>
-                    <div class="video-meta">Автор заблокирован администрацией</div>
-                </div>
-            </div>
-            '''
-        else:
-            likes = Like.query.filter_by(video_id=video.id).count()
-            video_html += f'''
-            <a href="/video/{video.id}" style="text-decoration: none; color: inherit;">
-                <div class="video-card">
-                    <div style="background: #333; height: 160px; display: flex; align-items: center; justify-content: center; font-size: 40px;">
-                        ▶️
-                    </div>
+        video_html = ""
+        for video in videos:
+            author_banned = video.author.is_banned if video.author else False
+            
+            if author_banned:
+                video_html += f'''
+                <div class="video-card banned">
                     <div class="video-info">
-                        <div class="video-title">{video.title[:50]}{'...' if len(video.title) > 50 else ''}</div>
-                        <div class="video-meta">
-                            👤 {video.author.username if video.author else 'Неизвестно'} • 
-                            👁️ {video.views} • 
-                            👍 {likes}
+                        <div class="video-title">❌ Видео заблокировано</div>
+                        <div class="video-meta">Автор заблокирован администрацией</div>
+                    </div>
+                </div>
+                '''
+            else:
+                likes = Like.query.filter_by(video_id=video.id).count()
+                video_html += f'''
+                <a href="/video/{video.id}" style="text-decoration: none; color: inherit;">
+                    <div class="video-card">
+                        <div style="background: #333; height: 160px; display: flex; align-items: center; justify-content: center; font-size: 40px;">
+                            ▶️
+                        </div>
+                        <div class="video-info">
+                            <div class="video-title">{video.title[:50]}{'...' if len(video.title) > 50 else ''}</div>
+                            <div class="video-meta">
+                                👤 {video.author.username if video.author else 'Неизвестно'} • 
+                                👁️ {video.views} • 
+                                👍 {likes}
+                            </div>
                         </div>
                     </div>
-                </div>
-            </a>
-            '''
-    
-    content = f'''
-    <h1>🎬 Xitube - Видео платформа</h1>
-    <p style="color: #aaa;">Добро пожаловать на {REPLIT_URL}</p>
-    
-    {current_user.is_authenticated and current_user.is_banned and 
-    '<div class="alert">⚠️ ВАШ АККАУНТ ЗАБЛОКИРОВАН! Причина: ' + (current_user.ban_reason or 'Нарушение правил') + '</div>' or ''}
-    
-    <div class="rules-box">
-        <h3>📜 ПРАВИЛА XITUBE:</h3>
-        <p>0.1 Администрация имеет полное право блокировать автора</p>
-        <p>0.2 Администрация имеет полное право удалять видео</p>
-        <p>0.3 Порно +18 и т.д. → блокировка автора</p>
-        <p>0.4 Нелегальный контент → бан автора</p>
-        <p><a href="/rules" style="color: white; font-weight: bold;">→ Полные правила ←</a></p>
-    </div>
-    
-    <h2>📹 Последние видео</h2>
-    <div class="video-grid">
-        {video_html if video_html else '<p>Пока нет видео. Будьте первым!</p>'}
-    </div>
-    '''
-    return render_page('Главная', content)
+                </a>
+                '''
+        
+        content = f'''
+        <h1>🎬 Xitube - Видео платформа</h1>
+        <p style="color: #aaa;">Добро пожаловать на видеохостинг</p>
+        
+        {current_user.is_authenticated and current_user.is_banned and 
+        '<div class="alert">⚠️ ВАШ АККАУНТ ЗАБЛОКИРОВАН! Причина: ' + (current_user.ban_reason or 'Нарушение правил') + '</div>' or ''}
+        
+        <div class="rules-box">
+            <h3>📜 ПРАВИЛА XITUBE:</h3>
+            <p>0.1 Администрация имеет полное право блокировать автора</p>
+            <p>0.2 Администрация имеет полное право удалять видео</p>
+            <p>0.3 Порно +18 и т.д. → блокировка автора</p>
+            <p>0.4 Нелегальный контент → бан автора</p>
+            <p><a href="/rules" style="color: white; font-weight: bold;">→ Полные правила ←</a></p>
+        </div>
+        
+        <h2>📹 Последние видео</h2>
+        <div class="video-grid">
+            {video_html if video_html else '<p>Пока нет видео. Будьте первым!</p>'}
+        </div>
+        '''
+        return render_page('Главная', content)
+    except Exception as e:
+        return render_page('Главная', '''
+        <h1>🎬 Xitube - Видео платформа</h1>
+        <p>Система загружается...</p>
+        <p><a href="/upload">📤 Загрузить видео</a> | <a href="/login">🔑 Войти</a></p>
+        ''')
 
 @app.route('/rules')
 def rules():
@@ -437,47 +439,6 @@ def like_video(video_id):
     db.session.commit()
     return redirect(f'/video/{video_id}')
 
-# Комментарии к видео
-@app.route('/comment/<int:video_id>', methods=['POST'])
-@login_required
-def add_comment(video_id):
-    if current_user.is_banned:
-        return "Ваш аккаунт заблокирован", 403
-    
-    video = Video.query.get(video_id)
-    if not video or video.is_deleted or (video.author and video.author.is_banned):
-        return "Видео недоступно", 404
-    
-    text = request.form.get('text')
-    if not text or len(text.strip()) < 1:
-        return "Комментарий не может быть пустым", 400
-    
-    if len(text) > 500:
-        return "Комментарий слишком длинный (макс. 500 символов)", 400
-    
-    comment = Comment(
-        text=text.strip(),
-        user_id=current_user.id,
-        video_id=video_id
-    )
-    db.session.add(comment)
-    db.session.commit()
-    
-    return redirect(f'/video/{video_id}')
-
-@app.route('/delete_comment/<int:comment_id>')
-@login_required
-def delete_comment(comment_id):
-    comment = Comment.query.get_or_404(comment_id)
-    
-    if current_user.id != comment.user_id and not current_user.is_admin:
-        return "У вас нет прав удалить этот комментарий", 403
-    
-    db.session.delete(comment)
-    db.session.commit()
-    
-    return redirect(f'/video/{comment.video_id}')
-
 @app.route(f'/{SECRET_ADMIN_URL}')
 def secret_admin_panel():
     total_users = User.query.count()
@@ -537,7 +498,6 @@ def secret_admin_panel():
     content = f'''
     <div class="admin-panel">
         <h1>👑 СЕКРЕТНАЯ АДМИН ПАНЕЛЬ XITUBE</h1>
-        <p style="color: #aaa;">{REPLIT_URL} | Доступ только по секретному URL</p>
         
         <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; margin: 30px 0;">
             <div style="background: #222; padding: 20px; border-radius: 8px; text-align: center;">
@@ -560,11 +520,11 @@ def secret_admin_panel():
         
         <h2>📹 Быстрые ссылки для управления:</h2>
         <div style="background: #222; padding: 15px; border-radius: 8px; margin: 15px 0;">
-            <p><strong>📁 Управление файлами:</strong> <a href="/filemanager_{ADMIN_PASSWORD}" style="color: #4CAF50;">{REPLIT_URL}/filemanager_{ADMIN_PASSWORD}</a></p>
-            <p><strong>👤 Блокировка пользователя:</strong> {REPLIT_URL}/banuser_{ADMIN_PASSWORD}/[ID_пользователя]</p>
-            <p><strong>📹 Удаление видео:</strong> {REPLIT_URL}/deletevideo_{ADMIN_PASSWORD}/[ID_видео]</p>
-            <p><strong>👤 Разблокировка:</strong> {REPLIT_URL}/unbanuser_{ADMIN_PASSWORD}/[ID_пользователя]</p>
-            <p><strong>📹 Восстановление видео:</strong> {REPLIT_URL}/restorevideo_{ADMIN_PASSWORD}/[ID_видео]</p>
+            <p><strong>📁 Управление файлами:</strong> <a href="/filemanager_{ADMIN_PASSWORD}" style="color: #4CAF50;">/filemanager_{ADMIN_PASSWORD}</a></p>
+            <p><strong>👤 Блокировка пользователя:</strong> /banuser_{ADMIN_PASSWORD}/[ID_пользователя]</p>
+            <p><strong>📹 Удаление видео:</strong> /deletevideo_{ADMIN_PASSWORD}/[ID_видео]</p>
+            <p><strong>👤 Разблокировка:</strong> /unbanuser_{ADMIN_PASSWORD}/[ID_пользователя]</p>
+            <p><strong>📹 Восстановление видео:</strong> /restorevideo_{ADMIN_PASSWORD}/[ID_видео]</p>
         </div>
         
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-top: 40px;">
@@ -672,12 +632,6 @@ def file_manager():
                 </tr>
                 {files_html if files_html else '<tr><td colspan="6" style="text-align: center; padding: 20px;">Файлов нет</td></tr>'}
             </table>
-        </div>
-        
-        <h2 style="margin-top: 40px;">📊 Информация о системе</h2>
-        <div style="background: #222; padding: 15px; border-radius: 8px;">
-            <pre style="color: #aaa;">{os.uname()}</pre>
-            <p>Свободно места: {os.statvfs(app.config['UPLOAD_FOLDER']).f_bavail * os.statvfs(app.config['UPLOAD_FOLDER']).f_frsize / (1024**3):.2f} GB</p>
         </div>
     </div>
     '''
@@ -854,12 +808,4 @@ def uploaded_file(filename):
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    print("=" * 70)
-    print("🎬 XITUBE ЗАПУЩЕН!")
-    print("=" * 70)
-    print(f"🌐 Сайт: {REPLIT_URL}")
-    print(f"🔐 Админ панель: {REPLIT_URL}/{SECRET_ADMIN_URL}")
-    print(f"🗑️ Управление файлами: {REPLIT_URL}/filemanager_{ADMIN_PASSWORD}")
-    print(f"👤 Тестовый пользователь: test / test123")
-    print("=" * 70)
-    app.run(host='0.0.0.0', port=port, debug=True)
+    app.run(host='0.0.0.0', port=port, debug=False)
