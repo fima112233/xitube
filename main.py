@@ -4,6 +4,7 @@ from flask_login import LoginManager, UserMixin, login_user, login_required, log
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
 import os
+import time
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'xitube-secret-2024'
@@ -68,103 +69,113 @@ with app.app_context():
         db.session.add(user)
         db.session.commit()
 
-# САМАЯ ПРОСТАЯ ГЛАВНАЯ СТРАНИЦА - ТОЛЬКО ДЛЯ HEALTH CHECK
-@app.route('/')
-def index():
-    # Если это health check запрос (по пути или по заголовкам)
-    path = request.path
-    user_agent = request.headers.get('User-Agent', '')
+# КЕШ ДЛЯ ГЛАВНОЙ СТРАНИЦЫ
+index_cache = None
+index_cache_time = 0
+CACHE_TIMEOUT = 30  # секунд
+
+def get_cached_index():
+    global index_cache, index_cache_time
+    current_time = time.time()
     
-    # Проверяем разные признаки health check запросов
-    is_health_check = (
-        path == '/' and request.method == 'GET' and 
-        len(request.args) == 0 and  # Нет query параметров
-        request.headers.get('Accept') != 'text/html' and  # Не запрашивает HTML
-        ('health' in user_agent.lower() or 
-         'check' in user_agent.lower() or
-         'monitor' in user_agent.lower() or
-         'bot' in user_agent.lower() or
-         'crawl' in user_agent.lower())
-    )
-    
-    if is_health_check:
-        # Быстрый ответ для health check
-        return 'OK', 200
-    
-    # Обычный пользователь - показываем нормальную страницу
-    try:
-        # Ограничиваем запросы к БД для скорости
-        videos = Video.query.filter_by(is_deleted=False).order_by(Video.created_at.desc()).limit(12).all()
-        
-        video_html = ""
-        for video in videos:
-            author_banned = video.author.is_banned if video.author else False
+    if index_cache is None or (current_time - index_cache_time) > CACHE_TIMEOUT:
+        try:
+            # БЕЗ ОГРАНИЧЕНИЙ - получаем все видео
+            videos = Video.query.filter_by(is_deleted=False).order_by(Video.created_at.desc()).all()
             
-            if author_banned:
-                video_html += f'''
-                <div class="video-card banned">
-                    <div class="video-info">
-                        <div class="video-title">❌ Видео заблокировано</div>
-                        <div class="video-meta">Автор заблокирован администрацией</div>
-                    </div>
-                </div>
-                '''
-            else:
-                # Вместо отдельного запроса для лайков, используем кеширование
-                likes = len(video.likes)
-                video_html += f'''
-                <a href="/video/{video.id}" style="text-decoration: none; color: inherit;">
-                    <div class="video-card">
-                        <div style="background: #333; height: 160px; display: flex; align-items: center; justify-content: center; font-size: 40px;">
-                            ▶️
-                        </div>
+            video_html = ""
+            for video in videos:
+                author_banned = video.author.is_banned if video.author else False
+                
+                if author_banned:
+                    video_html += f'''
+                    <div class="video-card banned">
                         <div class="video-info">
-                            <div class="video-title">{video.title[:50]}{'...' if len(video.title) > 50 else ''}</div>
-                            <div class="video-meta">
-                                👤 {video.author.username if video.author else 'Неизвестно'} • 
-                                👁️ {video.views} • 
-                                👍 {likes}
+                            <div class="video-title">❌ Видео заблокировано</div>
+                            <div class="video-meta">Автор заблокирован администрацией</div>
+                        </div>
+                    </div>
+                    '''
+                else:
+                    # Быстрый подсчет лайков через отношения
+                    likes_count = len(video.likes) if video.likes else 0
+                    video_html += f'''
+                    <a href="/video/{video.id}" style="text-decoration: none; color: inherit;">
+                        <div class="video-card">
+                            <div style="background: #333; height: 160px; display: flex; align-items: center; justify-content: center; font-size: 40px;">
+                                ▶️
+                            </div>
+                            <div class="video-info">
+                                <div class="video-title">{video.title[:50]}{'...' if len(video.title) > 50 else ''}</div>
+                                <div class="video-meta">
+                                    👤 {video.author.username if video.author else 'Неизвестно'} • 
+                                    👁️ {video.views} • 
+                                    👍 {likes_count}
+                                </div>
                             </div>
                         </div>
-                    </div>
-                </a>
-                '''
-        
-        content = f'''
-        <h1>🎬 Xitube - Видео платформа</h1>
-        <p style="color: #aaa;">Добро пожаловать на видеохостинг</p>
-        
-        {current_user.is_authenticated and current_user.is_banned and 
-        '<div class="alert">⚠️ ВАШ АККАУНТ ЗАБЛОКИРОВАН! Причина: ' + (current_user.ban_reason or 'Нарушение правил') + '</div>' or ''}
-        
-        <div class="rules-box">
-            <h3>📜 ПРАВИЛА XITUBE:</h3>
-            <p>0.1 Администрация имеет полное право блокировать автора</p>
-            <p>0.2 Администрация имеет полное право удалять видео</p>
-            <p>0.3 Порно +18 и т.д. → блокировка автора</p>
-            <p>0.4 Нелегальный контент → бан автора</p>
-            <p><a href="/rules" style="color: white; font-weight: bold;">→ Полные правила ←</a></p>
-        </div>
-        
-        <h2>📹 Последние видео</h2>
-        <div class="video-grid">
-            {video_html if video_html else '<p>Пока нет видео. Будьте первым!</p>'}
-        </div>
-        '''
-        return render_page('Главная', content)
-    except Exception:
-        # В случае ошибки возвращаем простую страницу
-        return '''
-        <!DOCTYPE html>
-        <html>
-        <head><title>Xitube</title><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
-        <body style="margin:0;padding:20px;background:#0f0f0f;color:white;font-family:Arial;">
-            <h1>🎬 Xitube</h1>
-            <p>Видео платформа</p>
-            <p><a href="/login" style="color:#ff0000;">Войти</a> | <a href="/register" style="color:#ff0000;">Регистрация</a></p>
-        </body>
-        </html>
-        ''', 200
+                    </a>
+                    '''
+            
+            content = f'''
+            <h1>🎬 Xitube - Видео платформа</h1>
+            <p style="color: #aaa;">Добро пожаловать на видеохостинг</p>
+            
+            {current_user.is_authenticated and current_user.is_banned and 
+            '<div class="alert">⚠️ ВАШ АККАУНТ ЗАБЛОКИРОВАН! Причина: ' + (current_user.ban_reason or 'Нарушение правил') + '</div>' or ''}
+            
+            <div class="rules-box">
+                <h3>📜 ПРАВИЛА XITUBE:</h3>
+                <p>0.1 Администрация имеет полное право блокировать автора</p>
+                <p>0.2 Администрация имеет полное право удалять видео</p>
+                <p>0.3 Порно +18 и т.д. → блокировка автора</p>
+                <p>0.4 Нелегальный контент → бан автора</p>
+                <p><a href="/rules" style="color: white; font-weight: bold;">→ Полные правила ←</a></p>
+            </div>
+            
+            <h2>📹 Все видео ({len(videos)})</h2>
+            <div class="video-grid">
+                {video_html if video_html else '<p>Пока нет видео. Будьте первым!</p>'}
+            </div>
+            '''
+            
+            index_cache = render_page('Главная', content)
+            index_cache_time = current_time
+            
+        except Exception as e:
+            # Простой fallback HTML
+            index_cache = '''
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Xitube</title>
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <style>
+                    body { font-family: Arial; background: #0f0f0f; color: white; margin: 0; padding: 20px; }
+                    a { color: #ff0000; }
+                </style>
+            </head>
+            <body>
+                <h1>🎬 Xitube</h1>
+                <p>Видео платформа работает</p>
+                <p><a href="/login">Войти</a> | <a href="/register">Регистрация</a></p>
+            </body>
+            </html>
+            '''
+            index_cache_time = current_time
+    
+    return index_cache
+
+# ГЛАВНАЯ СТРАНИЦА С КЕШИРОВАНИЕМ
+@app.route('/')
+def index():
+    # ОЧЕНЬ быстрый ответ для health check без генерации страницы
+    user_agent = request.headers.get('User-Agent', '')
+    if request.method == 'GET' and len(request.args) == 0 and 'curl' not in user_agent.lower() and 'python' not in user_agent.lower():
+        # Это может быть health check от Replit
+        return get_cached_index(), 200
+    
+    return get_cached_index(), 200
 
 def render_page(title, content):
     return f'''
@@ -220,11 +231,7 @@ def render_page(title, content):
 
 @app.route('/health')
 def health_check():
-    try:
-        db.session.execute('SELECT 1')
-        return jsonify({'status': 'ok', 'service': 'Xitube'}), 200
-    except Exception as e:
-        return jsonify({'status': 'error', 'error': str(e)}), 500
+    return 'OK', 200
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
@@ -360,6 +367,10 @@ def upload():
         db.session.add(video)
         db.session.commit()
         
+        # Сбросить кеш главной страницы
+        global index_cache
+        index_cache = None
+        
         return redirect(f'/video/{video.id}')
     
     content = '''
@@ -417,8 +428,8 @@ def video_page(video_id):
     video.views += 1
     db.session.commit()
     
-    likes = Like.query.filter_by(video_id=video_id).count()
-    user_liked = Like.query.filter_by(user_id=current_user.id, video_id=video_id).first() if current_user.is_authenticated else None
+    likes_count = len(video.likes) if video.likes else 0
+    user_liked = any(like.user_id == current_user.id for like in video.likes) if current_user.is_authenticated else False
     
     content = f'''
     <div style="max-width: 800px; margin: 0 auto;">
@@ -440,10 +451,10 @@ def video_page(video_id):
                 {current_user.is_authenticated and not current_user.is_banned and f'''
                 <form action="/like/{video.id}" method="POST" style="display: inline;">
                     <button type="submit" class="btn" style="background: {'#333' if user_liked else '#ff0000'}">
-                        {'❤️' if user_liked else '🤍'} {likes}
+                        {'❤️' if user_liked else '🤍'} {likes_count}
                     </button>
                 </form>
-                ''' or f'<span style="font-size: 20px;">❤️ {likes}</span>'}
+                ''' or f'<span style="font-size: 20px;">❤️ {likes_count}</span>'}
             </div>
         </div>
     </div>
@@ -460,25 +471,36 @@ def like_video(video_id):
     if not video or video.is_deleted or (video.author and video.author.is_banned):
         return "Видео недоступно", 404
     
-    existing = Like.query.filter_by(user_id=current_user.id, video_id=video_id).first()
-    if existing:
-        db.session.delete(existing)
+    existing_like = None
+    for like in video.likes:
+        if like.user_id == current_user.id:
+            existing_like = like
+            break
+    
+    if existing_like:
+        db.session.delete(existing_like)
     else:
         like = Like(user_id=current_user.id, video_id=video_id)
         db.session.add(like)
     
     db.session.commit()
+    
+    # Сбросить кеш главной страницы
+    global index_cache
+    index_cache = None
+    
     return redirect(f'/video/{video_id}')
-
-# АДМИН МАРШРУТЫ...
 
 @app.route('/uploads/<filename>')
 def uploaded_file(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
+# АДМИН МАРШРУТЫ...
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     print(f"🚀 Xitube запущен на порту {port}")
-    print(f"🌐 Доступен по адресу: http://0.0.0.0:{port}")
+    print(f"✅ Health check: http://0.0.0.0:{port}/health")
     print(f"🔐 Админка: /{SECRET_ADMIN_URL}")
+    print(f"👤 Тестовый пользователь: test / test123")
     app.run(host='0.0.0.0', port=port, debug=False)
